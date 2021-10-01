@@ -1,4 +1,8 @@
 ﻿using UnityEngine;
+using Firebase.Storage;
+using System.Collections;
+using System.Text;
+using System.Threading.Tasks;
 
 public static class UserDataManager
 {
@@ -6,14 +10,15 @@ public static class UserDataManager
 
     public static UserProgressData Progress;
 
-    public static void Load()
+    public static void LoadFromLocal()
     {
         // cek apakah ada data yang tersimpan sebagai PROGRESS_KEY
         if (!PlayerPrefs.HasKey(PROGRESS_KEY))
         {
             // jika tidak ada data, maka buat data yang baru
+            // dan upload ke cloud
             Progress = new UserProgressData();
-            Save();
+            Save(true);
         }
         else
         {
@@ -23,10 +28,67 @@ public static class UserDataManager
         }
     }
 
-    public static void Save()
+    public static IEnumerator LoadFromCloud(System.Action onCompleted)
+    {
+        StorageReference targetStorage = GetTargetCloudStorage();
+
+        bool isCompleted = false;
+        bool isSuccessful = false;
+        const long maxAllowedSize = 1024 * 1024; // sama dengan 1 MB
+
+        targetStorage.GetBytesAsync(maxAllowedSize).ContinueWith
+        ((Task<byte[]> task) =>
+        {
+            if (!task.IsFaulted)
+            {
+                string json = Encoding.Default.GetString(task.Result);
+                Progress = JsonUtility.FromJson<UserProgressData>(json);
+                isSuccessful = true;
+            }
+
+            isCompleted = true;
+        });
+
+        while (!isCompleted)
+        {
+            yield return null;
+        }
+        
+        // jika sukses mendownload, maka simpan data hasil download
+        if (isSuccessful)
+        {
+            Save();
+        }
+        else
+        {
+            // jika tidak ada data di cloud, maka load data dari local
+            LoadFromLocal();
+        }
+        
+        onCompleted?.Invoke();
+    }
+
+    public static void Save(bool UploadToCloud = false)
     {
         string json = JsonUtility.ToJson(Progress);
         PlayerPrefs.SetString(PROGRESS_KEY, json);
+
+        if (UploadToCloud)
+        {
+            byte[] data = Encoding.Default.GetBytes(json);
+            StorageReference targetStorage = GetTargetCloudStorage();
+
+            targetStorage.PutBytesAsync(data);
+        }
+    }
+
+    private static StorageReference GetTargetCloudStorage()
+    {
+        // gunakan device ID sebagai nama file yang akan disimpan di cloud
+        string deviceID = SystemInfo.deviceUniqueIdentifier;
+        FirebaseStorage storage = FirebaseStorage.DefaultInstance;
+
+        return storage.GetReferenceFromUrl($"{storage.RootReference}/{deviceID}");
     }
 
     public static bool HasResources(int index)
